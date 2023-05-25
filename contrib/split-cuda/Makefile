@@ -91,7 +91,7 @@ autogen/cuda_autogen_wrappers.o: autogen/cuda_autogen_wrappers.cpp
 	${CXX} ${CXXFLAGS} -Wno-unused-variable -c $< -o $@
 autogen/cuda_autogen_wrappers.cpp: autogen/generate-split-proc-wrappers.py \
                            autogen/cuda_wrapper_signatures.txt
-	python autogen/generate-split-proc-wrappers.py \
+	python3 autogen/generate-split-proc-wrappers.py \
   autogen/cuda_wrapper_signatures.txt --default \
   > autogen/cuda_autogen_wrappers.cpp ;
 
