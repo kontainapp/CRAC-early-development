@@ -32,9 +32,9 @@
 #include <unistd.h>
 
 #include "common.h"
-#include "logging.h"
 #include "custom-loader.h"
 #include "kernel-loader.h"
+#include "logging.h"
 #include "trampoline_setup.h"
 
 // #define UBUNTU 1
@@ -45,15 +45,13 @@
 // The kernel code is here (not recommended for a first reading):
 //    https://github.com/torvalds/linux/blob/master/fs/binfmt_elf.c
 
-static void get_elf_interpreter(int , Elf64_Addr *, char* , void* );
-static void* load_elf_interpreter(int , char* , Elf64_Addr *,
-                                  void * , DynObjInfo_t* );
-static void* map_elf_interpreter_load_segment(int , Elf64_Phdr , void* );
+static void get_elf_interpreter(int, Elf64_Addr *, char *, void *);
+static void *load_elf_interpreter(int, char *, Elf64_Addr *, void *,
+                                  DynObjInfo_t *);
+static void *map_elf_interpreter_load_segment(int, Elf64_Phdr, void *);
 
 // Global functions
-DynObjInfo_t
-safeLoadLib(const char *name)
-{
+DynObjInfo_t safeLoadLib(const char *name) {
   void *ld_so_addr = NULL;
   DynObjInfo_t info = {0};
 
@@ -71,17 +69,19 @@ safeLoadLib(const char *name)
   close(cmd_fd);
   strncpy(elf_interpreter, name, sizeof elf_interpreter);
 
+  printf("open elf_interpreter=%s\n", elf_interpreter);
   ld_so_fd = open(elf_interpreter, O_RDONLY);
   assert(ld_so_fd != -1);
-  info.baseAddr = load_elf_interpreter(ld_so_fd, elf_interpreter,
-                                        &ld_so_entry, ld_so_addr, &info);
+  info.baseAddr = load_elf_interpreter(ld_so_fd, elf_interpreter, &ld_so_entry,
+                                       ld_so_addr, &info);
   off_t mmap_offset;
   off_t sbrk_offset;
 #if UBUNTU
   char buf[256] = "/usr/lib/debug";
-  buf[sizeof(buf)-1] = '\0';
+  buf[sizeof(buf) - 1] = '\0';
   ssize_t rc = 0;
-  rc = readlink(elf_interpreter, buf+strlen(buf), sizeof(buf)-strlen(buf)-1);
+  rc = readlink(elf_interpreter, buf + strlen(buf),
+                sizeof(buf) - strlen(buf) - 1);
   if (rc != -1 && access(buf, F_OK) == 0) {
     // Debian family (Ubuntu, etc.) use this scheme to store debug symbols.
     //   http://sourceware.org/gdb/onlinedocs/gdb/Separate-Debug-Files.html
@@ -101,19 +101,18 @@ safeLoadLib(const char *name)
   assert(sbrk_offset);
   info.mmapAddr = (VA)info.baseAddr + mmap_offset;
   info.sbrkAddr = (VA)info.baseAddr + sbrk_offset;
+  printf("mmapAddr=%p sbrkAddr=%p\n", info.mmapAddr, info.sbrkAddr);
   // FIXME: The ELF Format manual says that we could pass the ld_so_fd to ld.so,
   //   and it would use that to load it.
   close(ld_so_fd);
-  info.entryPoint = (void*)((unsigned long)info.baseAddr +
-                            (unsigned long)cmd_entry);
+  info.entryPoint =
+      (void *)((unsigned long)info.baseAddr + (unsigned long)cmd_entry);
   return info;
 }
 
 // Local functions
-static void
-get_elf_interpreter(int fd, Elf64_Addr *cmd_entry,
-                    char* elf_interpreter, void *ld_so_addr)
-{
+static void get_elf_interpreter(int fd, Elf64_Addr *cmd_entry,
+                                char *elf_interpreter, void *ld_so_addr) {
   int rc;
   char e_ident[EI_NIDENT];
 
@@ -139,7 +138,7 @@ get_elf_interpreter(int fd, Elf64_Addr *cmd_entry,
     assert(i < elf_hdr.e_phnum);
     rc = read(fd, &phdr, sizeof(phdr)); // Read consecutive program headers
     assert(rc == sizeof(phdr));
-#if 0 // not required for this project
+#if 0  // not required for this project
     if (phdr.p_type == PT_INTERP) break;
   }
   lseek(fd, phdr.p_offset, SEEK_SET); // Point to beginning of elf interpreter
@@ -158,144 +157,146 @@ get_elf_interpreter(int fd, Elf64_Addr *cmd_entry,
       DLOG(INFO, "Debug symbols for interpreter in: %s\n", buf);
     }
   }
-#else // ifdef UBUNTU
+#else  // ifdef UBUNTU
   }
 #endif // ifdef UBUNTU
-}
+  }
 
-static void*
-load_elf_interpreter(int fd, char *elf_interpreter,
-                     Elf64_Addr *ld_so_entry, void *ld_so_addr,
-                     DynObjInfo_t *info)
-{
-  char e_ident[EI_NIDENT];
-  int rc;
-  int firstTime = 1;
-  void *baseAddr = NULL;
+  static void *load_elf_interpreter(int fd, char *elf_interpreter,
+                                    Elf64_Addr *ld_so_entry, void *ld_so_addr,
+                                    DynObjInfo_t *info) {
+    printf("load_elf_interpreter: elf_interpreter=%s\n", elf_interpreter);
+    char e_ident[EI_NIDENT];
+    int rc;
+    int firstTime = 1;
+    void *baseAddr = NULL;
 
-  rc = read(fd, e_ident, sizeof(e_ident));
-  assert(rc == sizeof(e_ident));
-  assert(strncmp(e_ident, ELFMAG, sizeof(ELFMAG)-1) == 0);
-  // FIXME:  Add support for 32-bit ELF later
-  assert(e_ident[EI_CLASS] == ELFCLASS64);
+    rc = read(fd, e_ident, sizeof(e_ident));
+    assert(rc == sizeof(e_ident));
+    assert(strncmp(e_ident, ELFMAG, sizeof(ELFMAG) - 1) == 0);
+    // FIXME:  Add support for 32-bit ELF later
+    assert(e_ident[EI_CLASS] == ELFCLASS64);
 
-  // Reset fd to beginning and parse file header
-  lseek(fd, 0, SEEK_SET);
-  Elf64_Ehdr elf_hdr;
-  rc = read(fd, &elf_hdr, sizeof(elf_hdr));
-  assert(rc == sizeof(elf_hdr));
+    // Reset fd to beginning and parse file header
+    lseek(fd, 0, SEEK_SET);
+    Elf64_Ehdr elf_hdr;
+    rc = read(fd, &elf_hdr, sizeof(elf_hdr));
+    assert(rc == sizeof(elf_hdr));
 
-  // Find ELF interpreter
-  int phoff = elf_hdr.e_phoff;
-  Elf64_Phdr phdr;
-  int i;
-  lseek(fd, phoff, SEEK_SET);
-  for (i = 0; i < elf_hdr.e_phnum; i++ ) {
-    rc = read(fd, &phdr, sizeof(phdr)); // Read consecutive program headers
-    assert(rc == sizeof(phdr));
-    if (phdr.p_type == PT_LOAD) {
-      // PT_LOAD is the only type of loadable segment for ld.so
-      if (firstTime) {
-        baseAddr = map_elf_interpreter_load_segment(fd, phdr, ld_so_addr);
-        firstTime = 0;
-      } else {
-        map_elf_interpreter_load_segment(fd, phdr, ld_so_addr);
+    // Find ELF interpreter
+    int phoff = elf_hdr.e_phoff;
+    Elf64_Phdr phdr;
+    int i;
+    lseek(fd, phoff, SEEK_SET);
+    for (i = 0; i < elf_hdr.e_phnum; i++) {
+      rc = read(fd, &phdr, sizeof(phdr)); // Read consecutive program headers
+      assert(rc == sizeof(phdr));
+      if (phdr.p_type == PT_LOAD) {
+        // PT_LOAD is the only type of loadable segment for ld.so
+        if (firstTime) {
+          baseAddr = map_elf_interpreter_load_segment(fd, phdr, ld_so_addr);
+          firstTime = 0;
+        } else {
+          map_elf_interpreter_load_segment(fd, phdr, ld_so_addr);
+        }
       }
     }
+    info->phnum = elf_hdr.e_phnum;
+    info->phdr = (VA)baseAddr + elf_hdr.e_phoff;
+    return baseAddr;
   }
-  info->phnum = elf_hdr.e_phnum;
-  info->phdr = (VA)baseAddr + elf_hdr.e_phoff;
-  return baseAddr;
-}
 
-static void*
-map_elf_interpreter_load_segment(int fd, Elf64_Phdr phdr, void *ld_so_addr)
-{
-  static char *base_address = NULL; // is NULL on call to first LOAD segment
-  static int first_time = 1;
-  int prot = PROT_NONE;
-  if (phdr.p_flags & PF_R)
-    prot |= PROT_READ;
-  if (phdr.p_flags & PF_W)
-    prot |= PROT_WRITE;
-  if (phdr.p_flags & PF_X)
-    prot |= PROT_EXEC;
-  assert(phdr.p_memsz >= phdr.p_filesz);
-  // NOTE:  man mmap says:
-  // For a file that is not a  multiple  of  the  page  size,  the
-  // remaining memory is zeroed when mapped, and writes to that region
-  // are not written out to the file.
-  void *rc2;
-  // Check ELF Format constraint:
-  if (phdr.p_align > 1) {
-    assert(phdr.p_vaddr % phdr.p_align == phdr.p_offset % phdr.p_align);
-  }
-  int vaddr = phdr.p_vaddr;
+  static void *map_elf_interpreter_load_segment(int fd, Elf64_Phdr phdr,
+                                                void *ld_so_addr) {
+    printf("map_elf_interpretter_load_segment: phdr.vaddr=0x%lx "
+           "phdr.p_filesz=%ld phdr.p_memsz=%ld ld_so_addr=%p\n",
+           phdr.p_vaddr, phdr.p_filesz, phdr.p_memsz, ld_so_addr);
+    static char *base_address = NULL; // is NULL on call to first LOAD segment
+    static int first_time = 1;
+    int prot = PROT_NONE;
+    if (phdr.p_flags & PF_R)
+      prot |= PROT_READ;
+    if (phdr.p_flags & PF_W)
+      prot |= PROT_WRITE;
+    if (phdr.p_flags & PF_X)
+      prot |= PROT_EXEC;
+    assert(phdr.p_memsz >= phdr.p_filesz);
+    // NOTE:  man mmap says:
+    // For a file that is not a  multiple  of  the  page  size,  the
+    // remaining memory is zeroed when mapped, and writes to that region
+    // are not written out to the file.
+    void *rc2;
+    // Check ELF Format constraint:
+    if (phdr.p_align > 1) {
+      assert(phdr.p_vaddr % phdr.p_align == phdr.p_offset % phdr.p_align);
+    }
+    int vaddr = phdr.p_vaddr;
 
-  int flags = MAP_PRIVATE;
-  unsigned long addr = ROUND_DOWN(base_address + vaddr);
-  size_t size = ROUND_UP(phdr.p_filesz + PAGE_OFFSET(phdr.p_vaddr));
-  off_t offset = phdr.p_offset - PAGE_OFFSET(phdr.p_vaddr);
+    int flags = MAP_PRIVATE;
+    unsigned long addr = ROUND_DOWN(base_address + vaddr);
+    size_t size = ROUND_UP(phdr.p_filesz + PAGE_OFFSET(phdr.p_vaddr));
+    off_t offset = phdr.p_offset - PAGE_OFFSET(phdr.p_vaddr);
 
-  // phdr.p_vaddr = ROUND_DOWN(phdr.p_vaddr);
-  // phdr.p_offset = ROUND_DOWN(phdr.p_offset);
-  // phdr.p_memsz = phdr.p_memsz + (vaddr - phdr.p_vaddr);
-  // NOTE:  base_address is 0 for first load segment
-  if (first_time) {
-	  printf("size %d \n", (int)phdr.p_filesz);
-    phdr.p_vaddr += (unsigned long long)ld_so_addr;
-    size = 0x27000;
-  } else {
-    flags |= MAP_FIXED;
-  }
-  if (ld_so_addr) {
-    flags |= MAP_FIXED;
-  }
-  // FIXME:  On first load segment, we should map 0x400000 (2*phdr.p_align),
-  //         and then unmap the unused portions later after all the
-  //         LOAD segments are mapped.  This is what ld.so would do.
-  rc2 = mmapWrapper((void *)addr, size, prot, flags, fd, offset);
-  if (rc2 == MAP_FAILED) {
-    DLOG(ERROR, "Failed to map memory region at %p. Error:%s\n",
-         (void*)addr, strerror(errno));
-    return NULL;
-  }
-  unsigned long startBss = (uintptr_t)base_address +
-                          phdr.p_vaddr + phdr.p_filesz;
-  unsigned long endBss = (uintptr_t)base_address + phdr.p_vaddr + phdr.p_memsz;
-  // Required by ELF Format:
-  if (phdr.p_memsz > phdr.p_filesz) {
-    // This condition is true for the RW (data) segment of ld.so
-    // We need to clear out the rest of memory contents, similarly to
-    // what the kernel would do. See here:
-    //   https://elixir.bootlin.com/linux/v4.18.11/source/fs/binfmt_elf.c#L905
-    // Note that p_memsz indicates end of data (&_end)
-
-    // First, get to the page boundary
-    uintptr_t endByte = ROUND_UP(startBss);
-    // Next, figure out the number of bytes we need to clear out.
-    // From Bss to the end of page.
-    size_t bytes = endByte - startBss;
-    memset((void*)startBss, 0, bytes);
-  }
-  // If there's more bss that overflows to another page, map it in and
-  // zero it out
-  startBss  = ROUND_UP(startBss);
-  endBss    = ROUND_UP(endBss);
-  if (endBss > startBss) {
-    void *base = (void*)startBss;
-    size_t len = endBss - startBss;
-    flags |= MAP_ANONYMOUS; // This should give us 0-ed out pages
-    rc2 = mmapWrapper(base, len, prot, flags, -1, 0);
+    // phdr.p_vaddr = ROUND_DOWN(phdr.p_vaddr);
+    // phdr.p_offset = ROUND_DOWN(phdr.p_offset);
+    // phdr.p_memsz = phdr.p_memsz + (vaddr - phdr.p_vaddr);
+    // NOTE:  base_address is 0 for first load segment
+    if (first_time) {
+      printf("size %d \n", (int)phdr.p_filesz);
+      phdr.p_vaddr += (unsigned long long)ld_so_addr;
+      size = 0x27000;
+    } else {
+      flags |= MAP_FIXED;
+    }
+    if (ld_so_addr) {
+      flags |= MAP_FIXED;
+    }
+    // FIXME:  On first load segment, we should map 0x400000 (2*phdr.p_align),
+    //         and then unmap the unused portions later after all the
+    //         LOAD segments are mapped.  This is what ld.so would do.
+    rc2 = mmapWrapper((void *)addr, size, prot, flags, fd, offset);
     if (rc2 == MAP_FAILED) {
-      DLOG(ERROR, "Failed to map memory region at %p. Error:%s\n",
-           (void*)startBss, strerror(errno));
+      DLOG(ERROR, "Failed to map memory region at %p. Error:%s\n", (void *)addr,
+           strerror(errno));
       return NULL;
     }
+    unsigned long startBss =
+        (uintptr_t)base_address + phdr.p_vaddr + phdr.p_filesz;
+    unsigned long endBss =
+        (uintptr_t)base_address + phdr.p_vaddr + phdr.p_memsz;
+    // Required by ELF Format:
+    if (phdr.p_memsz > phdr.p_filesz) {
+      // This condition is true for the RW (data) segment of ld.so
+      // We need to clear out the rest of memory contents, similarly to
+      // what the kernel would do. See here:
+      //   https://elixir.bootlin.com/linux/v4.18.11/source/fs/binfmt_elf.c#L905
+      // Note that p_memsz indicates end of data (&_end)
+
+      // First, get to the page boundary
+      uintptr_t endByte = ROUND_UP(startBss);
+      // Next, figure out the number of bytes we need to clear out.
+      // From Bss to the end of page.
+      size_t bytes = endByte - startBss;
+      memset((void *)startBss, 0, bytes);
+    }
+    // If there's more bss that overflows to another page, map it in and
+    // zero it out
+    startBss = ROUND_UP(startBss);
+    endBss = ROUND_UP(endBss);
+    if (endBss > startBss) {
+      void *base = (void *)startBss;
+      size_t len = endBss - startBss;
+      flags |= MAP_ANONYMOUS; // This should give us 0-ed out pages
+      rc2 = mmapWrapper(base, len, prot, flags, -1, 0);
+      if (rc2 == MAP_FAILED) {
+        DLOG(ERROR, "Failed to map memory region at %p. Error:%s\n",
+             (void *)startBss, strerror(errno));
+        return NULL;
+      }
+    }
+    if (first_time) {
+      first_time = 0;
+      base_address = (char *)rc2;
+    }
+    return base_address;
   }
-  if (first_time) {
-    first_time = 0;
-    base_address = (char *)rc2;
-  }
-  return base_address;
-}

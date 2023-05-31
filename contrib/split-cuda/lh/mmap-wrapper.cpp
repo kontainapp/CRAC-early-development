@@ -22,29 +22,29 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE // For MAP_ANONYMOUS
 #endif
-#include <errno.h>
-#include <stddef.h>
+#include <algorithm>
 #include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stddef.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <stdlib.h>
-#include <fcntl.h>
 #include <vector>
-#include <algorithm>
 
 #include "common.h"
-#include "logging.h"
-#include "kernel-loader.h"
-#include "utils.h"
-#include "trampoline_setup.h"
 #include "getmmap.h"
+#include "kernel-loader.h"
+#include "logging.h"
 #include "switch_context.h"
+#include "trampoline_setup.h"
+#include "utils.h"
 
 using namespace std;
 
-#define MMAP_OFF_HIGH_MASK ((-(4096ULL << 1) << (8 * sizeof (off_t) - 1)))
-#define MMAP_OFF_LOW_MASK  (4096ULL - 1)
+#define MMAP_OFF_HIGH_MASK ((-(4096ULL << 1) << (8 * sizeof(off_t) - 1)))
+#define MMAP_OFF_LOW_MASK (4096ULL - 1)
 #define MMAP_OFF_MASK (MMAP_OFF_HIGH_MASK | MMAP_OFF_LOW_MASK)
 #define _real_mmap mmap
 #define _real_munmap munmap
@@ -53,37 +53,30 @@ using namespace std;
 // TODO:
 //  1. Make the size of list dynamic
 //  2. Remove region from list when the application calls munmap
-#define MAX_TRACK   1000
-static vector<MmapInfo_t> mmaps;
+#define MAX_TRACK 1000
+static vector<MmapInfo_t> mmaps(32);
 
-static void* __mmapWrapper(void* , size_t , int , int , int , off_t );
-static void patchLibc(int , const void* , const char* );
+static void *__mmapWrapper(void *, size_t, int, int, int, off_t);
+static void patchLibc(int, const void *, const char *);
 static void addRegionTommaps(void *, size_t);
 static int __munmapWrapper(void *, size_t);
 static void updateMmaps(void *, size_t);
 
-
-bool
-compare (MmapInfo_t &a, MmapInfo_t &b)
-{
-  return (a.addr < b.addr);
-}
+bool compare(MmapInfo_t &a, MmapInfo_t &b) { return (a.addr < b.addr); }
 
 // Returns a pointer to the array of mmap-ed regions
 // Sets num to the number of valid items in the array
-vector<MmapInfo_t> &
-getMmappedList(int *num)
-{
+vector<MmapInfo_t> &getMmappedList(int *num) {
   *num = mmaps.size();
   // sort the mmaps list by address
   sort(mmaps.begin(), mmaps.end(), compare);
   return mmaps;
 }
 
-void*
-mmapWrapper(void *addr, size_t length, int prot,
-            int flags, int fd, off_t offset)
-{
+void *mmapWrapper(void *addr, size_t length, int prot, int flags, int fd,
+                  off_t offset) {
+  printf("mmapWrapper(%p, %ld, 0x%x, 0x%x, %x, 0x%lx)\n", addr, length, prot,
+         flags, fd, offset);
   void *ret = MAP_FAILED;
   JUMP_TO_LOWER_HALF(lhInfo.lhFsAddr);
   ret = __mmapWrapper(addr, length, prot, flags, fd, offset);
@@ -91,10 +84,8 @@ mmapWrapper(void *addr, size_t length, int prot,
   return ret;
 }
 
-static void*
-__mmapWrapper(void *addr, size_t length, int prot,
-              int flags, int fd, off_t offset)
-{
+static void *__mmapWrapper(void *addr, size_t length, int prot, int flags,
+                           int fd, off_t offset) {
   void *ret = MAP_FAILED;
   if (offset & MMAP_OFF_MASK) {
     errno = EINVAL;
@@ -111,15 +102,19 @@ __mmapWrapper(void *addr, size_t length, int prot,
       if (found && (prot & PROT_EXEC)) {
         int rc = mprotect(ret, length, prot | PROT_WRITE);
         if (rc < 0) {
-          DLOG(ERROR, "Failed to add PROT_WRITE perms for memory region at: %p "
-               "of: %zu bytes. Error: %s\n", addr, length, strerror(errno));
+          DLOG(ERROR,
+               "Failed to add PROT_WRITE perms for memory region at: %p "
+               "of: %zu bytes. Error: %s\n",
+               addr, length, strerror(errno));
           return NULL;
         }
         patchLibc(fd, ret, glibcFullPath);
         rc = mprotect(ret, length, prot);
         if (rc < 0) {
-          DLOG(ERROR, "Failed to restore perms for memory region at: %p "
-               "of: %zu bytes. Error: %s\n", addr, length, strerror(errno));
+          DLOG(ERROR,
+               "Failed to restore perms for memory region at: %p "
+               "of: %zu bytes. Error: %s\n",
+               addr, length, strerror(errno));
           return NULL;
         }
       }
@@ -128,9 +123,7 @@ __mmapWrapper(void *addr, size_t length, int prot,
   return ret;
 }
 
-int
-munmapWrapper(void *addr, size_t length)
-{
+int munmapWrapper(void *addr, size_t length) {
   int ret = -1;
   JUMP_TO_LOWER_HALF(lhInfo.lhFsAddr);
   ret = __munmapWrapper(addr, length);
@@ -138,9 +131,7 @@ munmapWrapper(void *addr, size_t length)
   return ret;
 }
 
-static int
-__munmapWrapper(void *addr, size_t length)
-{
+static int __munmapWrapper(void *addr, size_t length) {
   int ret = -1;
   if (addr == 0) {
     errno = EINVAL;
@@ -155,9 +146,7 @@ __munmapWrapper(void *addr, size_t length)
   return ret;
 }
 
-static void
-patchLibc(int fd, const void *base, const char *glibc)
-{
+static void patchLibc(int fd, const void *base, const char *glibc) {
   assert(base);
   assert(fd > 0);
   const char *MMAP_SYMBOL_NAME = "mmap";
@@ -171,8 +160,8 @@ patchLibc(int fd, const void *base, const char *glibc)
   off_t sbrkOffset;
 #ifdef UBUNTU
   char buf[256] = "/usr/lib/debug";
-  buf[sizeof(buf)-1] = '\0';
-  memcpy(buf+strlen(buf), glibc, strlen(glibc));
+  buf[sizeof(buf) - 1] = '\0';
+  memcpy(buf + strlen(buf), glibc, strlen(glibc));
   /* if (access(buf, F_OK) == 0) {
     // Debian family (Ubuntu, etc.) use this scheme to store debug symbols.
     //   http://sourceware.org/gdb/onlinedocs/gdb/Separate-Debug-Files.html
@@ -192,8 +181,8 @@ patchLibc(int fd, const void *base, const char *glibc)
   assert(mmapOffset);
   assert(munmapOffset);
   assert(sbrkOffset);
-  insertTrampoline((VA)base + mmapOffset, (void*)&mmapWrapper);
-  insertTrampoline((VA)base + munmapOffset, (void*)&munmapWrapper);
+  insertTrampoline((VA)base + mmapOffset, (void *)&mmapWrapper);
+  insertTrampoline((VA)base + munmapOffset, (void *)&munmapWrapper);
   insertTrampoline((VA)base + sbrkOffset, (void *)&sbrkWrapper);
   DLOG(INFO, "Patched libc (%s) @ %p: offset(sbrk): %zx; offset(mmap): %zx\n",
        glibc, base, sbrkOffset, mmapOffset);
@@ -201,17 +190,14 @@ patchLibc(int fd, const void *base, const char *glibc)
   lseek(fd, saveOffset, SEEK_SET);
 }
 
-void
-addRegionTommaps(void * addr, size_t length) {
+void addRegionTommaps(void *addr, size_t length) {
   MmapInfo_t newRegion;
   newRegion.addr = addr;
   newRegion.len = length;
   mmaps.push_back(newRegion);
 }
 
-
-void
-updateMmaps(void *addr, size_t length) {
+void updateMmaps(void *addr, size_t length) {
   // traverse through the mmap'ed list and check whether to remove the whole
   // entry or update the address and length
   uint64_t unmaped_start_addr = (uint64_t)addr;
@@ -224,51 +210,53 @@ updateMmaps(void *addr, size_t length) {
     uint64_t end_addr = (uint64_t)(start_addr + it->len);
     // if unmaped start address is same as mmaped start address
     if (start_addr == unmaped_start_addr) {
-      if (unmaped_end_addr ==  end_addr) {
+      if (unmaped_end_addr == end_addr) {
         // remove full entry
         mmaps.erase(it);
         return;
       } else if (end_addr > unmaped_end_addr) {
-          it->addr = (void *)unmaped_end_addr;
-          it->len = it->len - length;
-          return;
-        } else {
+        it->addr = (void *)unmaped_end_addr;
+        it->len = it->len - length;
+        return;
+      } else {
         // if the unmaped region is going beyond the len
         unmaped_start_addr = end_addr;
         length -= it->len;
         mmaps.erase(it);
         it--;
       }
-    } else if ((unmaped_start_addr < start_addr) && (unmaped_end_addr > start_addr)) {
-      if (unmaped_end_addr ==  end_addr) {
+    } else if ((unmaped_start_addr < start_addr) &&
+               (unmaped_end_addr > start_addr)) {
+      if (unmaped_end_addr == end_addr) {
         mmaps.erase(it);
         return;
       } else if (end_addr > unmaped_end_addr) {
-          it->addr = (void *)unmaped_end_addr;
-          it->len = end_addr - unmaped_end_addr;
-          return;
-        } else {
+        it->addr = (void *)unmaped_end_addr;
+        it->len = end_addr - unmaped_end_addr;
+        return;
+      } else {
         // if the unmaped region is going beyond the len
         length -= length - (end_addr - unmaped_start_addr);
         unmaped_start_addr = end_addr;
         mmaps.erase(it);
         it--;
       }
-    } else if ((unmaped_start_addr > start_addr) && (unmaped_start_addr <= end_addr)) {
-        it->len = unmaped_start_addr - start_addr;
-        if (unmaped_end_addr ==  end_addr) {
-          return;
-        } else if (end_addr > unmaped_end_addr) {
-          MmapInfo_t new_entry;
-          new_entry.addr = (void *)unmaped_end_addr;
-          new_entry.len = end_addr - unmaped_end_addr;
-          mmaps.push_back(new_entry);
-          return;
-        } else {
-          // if the unmaped region is going beyond the len
-          length = length - (end_addr - unmaped_start_addr);
-          unmaped_start_addr = end_addr;
-        }
+    } else if ((unmaped_start_addr > start_addr) &&
+               (unmaped_start_addr <= end_addr)) {
+      it->len = unmaped_start_addr - start_addr;
+      if (unmaped_end_addr == end_addr) {
+        return;
+      } else if (end_addr > unmaped_end_addr) {
+        MmapInfo_t new_entry;
+        new_entry.addr = (void *)unmaped_end_addr;
+        new_entry.len = end_addr - unmaped_end_addr;
+        mmaps.push_back(new_entry);
+        return;
+      } else {
+        // if the unmaped region is going beyond the len
+        length = length - (end_addr - unmaped_start_addr);
+        unmaped_start_addr = end_addr;
+      }
     }
   }
 }

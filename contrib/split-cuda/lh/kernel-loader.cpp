@@ -35,36 +35,38 @@
 
 #include <sys/auxv.h>
 #include <sys/mman.h>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 #include "common.h"
-#include "mem-restore.h"
 #include "custom-loader.h"
+#include "getmmap.h"
 #include "kernel-loader.h"
+#include "log_and_replay.h"
 #include "logging.h"
+#include "mem-restore.h"
 #include "procmapsutils.h"
 #include "trampoline_setup.h"
 #include "utils.h"
-#include "getmmap.h"
-#include "log_and_replay.h"
 // #include "device_heap_util.h"
+
+#include <asm/prctl.h>
+#include <sys/prctl.h>
 
 LowerHalfInfo_t lhInfo;
 UpperHalfInfo_t uhInfo;
 static void readUhInfoAddr();
 
 // Local function declarations
-static void getProcStatField(enum Procstat_t , char *, size_t );
+static void getProcStatField(enum Procstat_t, char *, size_t);
 static void getStackRegion(Area *);
-static void* deepCopyStack(void *, const void *, size_t,
-                           const void *, const void*,
-                           const DynObjInfo_t *);
-static void* createNewStackForRtld(const DynObjInfo_t *);
-static void* createNewHeapForRtld(const DynObjInfo_t *);
-static void* getEntryPoint(DynObjInfo_t );
-static void patchAuxv(ElfW(auxv_t) *, unsigned long ,
-                      unsigned long , unsigned long );
+static void *deepCopyStack(void *, const void *, size_t, const void *,
+                           const void *, const DynObjInfo_t *);
+static void *createNewStackForRtld(const DynObjInfo_t *);
+static void *createNewHeapForRtld(const DynObjInfo_t *);
+static void *getEntryPoint(DynObjInfo_t);
+static void patchAuxv(ElfW(auxv_t) *, unsigned long, unsigned long,
+                      unsigned long);
 static int writeLhInfoToFile();
 static int setupLowerHalfInfo();
 static void printUsage();
@@ -73,16 +75,20 @@ static void printRestartUsage();
 
 // This function loads in ld.so, sets up a separate stack for it, and jumps
 // to the entry point of ld.so
-void
-runRtld()
-{
+void runRtld() {
   int rc = -1;
+
+  unsigned long fsval = 0;
+  if (arch_prctl(ARCH_GET_FS, &fsval) < 0) {
+    printf("ERROR: ARCH_GET_FS failed: %d", errno);
+  }
+  printf("FS=0x%lx\n", fsval);
 
   // Pointer to the ld.so entry point
   void *ldso_entrypoint = NULL;
 
   // Load RTLD (ld.so)
-  char *ldname  = getenv("TARGET_LD");
+  char *ldname = getenv("TARGET_LD");
   char *uhpreload = getenv("UH_PRELOAD");
   if (!ldname || !uhpreload) {
     printUsage();
@@ -94,6 +100,11 @@ runRtld()
     DLOG(ERROR, "Error loading the runtime loader (%s). Exiting...\n", ldname);
     return;
   }
+
+  if (arch_prctl(ARCH_GET_FS, &fsval) < 0) {
+    printf("ERROR: ARCH_GET_FS failed: %d", errno);
+  }
+  printf("FS=0x%lx\n", fsval);
 
   DLOG(INFO, "New ld.so loaded at: %p\n", ldso.baseAddr);
   ldso_entrypoint = getEntryPoint(ldso);
@@ -137,32 +148,28 @@ runRtld()
 
   // Change the stack pointer to point to the new stack and jump into ld.so
   // TODO: Clean up all the registers?
-  asm volatile (CLEAN_FOR_64_BIT(mov %0, %%esp; )
-                : : "g" (newStack) : "memory");
-  asm volatile ("jmp *%0" : : "g" (ldso_entrypoint) : "memory");
+  asm volatile(CLEAN_FOR_64_BIT(mov % 0, % % esp;)
+               :
+               : "g"(newStack)
+               : "memory");
+  asm volatile("jmp *%0" : : "g"(ldso_entrypoint) : "memory");
 }
 
 // Local functions
 
-static void
-printUsage()
-{
+static void printUsage() {
   DLOG(ERROR, "Usage: UH_PRELOAD=/path/to/libupperhalfwrappers.so "
-          "TARGET_LD=/path/to/ld.so ./kernel-loader "
-          "<target-application> [application arguments ...]\n");
+              "TARGET_LD=/path/to/ld.so ./kernel-loader "
+              "<target-application> [application arguments ...]\n");
 }
 
-static void
-printRestartUsage()
-{
+static void printRestartUsage() {
   DLOG(ERROR, "Usage: ./kernel-loader --restore /path/to/ckpt.img\n");
 }
-//extern "C" void** __cudaRegisterFatBinary(void *fatCubin);
-//extern void ** getCubinHandle();
+// extern "C" void** __cudaRegisterFatBinary(void *fatCubin);
+// extern void ** getCubinHandle();
 // #define shift argv++; argc--;
-int
-main(int argc, char *argv[], char **environ)
-{
+int main(int argc, char *argv[], char **environ) {
   if (argc < 2) {
     printUsage();
     return -1;
@@ -180,11 +187,11 @@ main(int argc, char *argv[], char **environ)
       DLOG(ERROR, "Failed to set up lhinfo for the upper half. Exiting...\n");
       exit(-1);
     }
-//    void * cptr=NULL;
- //   cudaMalloc(&cptr, 436*sizeof(char));
-	
-    //testing
-   // lhInfo.new_getFatCubinHandle=(void *)&getCubinHandle;
+    //    void * cptr=NULL;
+    //   cudaMalloc(&cptr, 436*sizeof(char));
+
+    // testing
+    // lhInfo.new_getFatCubinHandle=(void *)&getCubinHandle;
     //
     /*
      restoreCheckpoint will
@@ -194,9 +201,9 @@ main(int argc, char *argv[], char **environ)
     */
     restoreCheckpointImg(ckptFd);
     readUhInfoAddr();
-    
+
     logs_read_and_apply();
-    
+
     copy_lower_half_data();
     returnTodmtcp();
     // Following line should not be reached.
@@ -206,9 +213,7 @@ main(int argc, char *argv[], char **environ)
   return 0;
 }
 // Returns the /proc/self/stat entry in the out string (of length len)
-static void
-getProcStatField(enum Procstat_t type, char *out, size_t len)
-{
+static void getProcStatField(enum Procstat_t type, char *out, size_t len) {
   const char *procPath = "/proc/self/stat";
   char sbuf[1024] = {0};
   int field_counter = 0;
@@ -223,7 +228,8 @@ getProcStatField(enum Procstat_t type, char *out, size_t len)
 
   num_read = read(fd, sbuf, sizeof sbuf - 1);
   close(fd);
-  if (num_read <= 0) return;
+  if (num_read <= 0)
+    return;
   sbuf[num_read] = '\0';
 
   field_str = strtok(sbuf, " ");
@@ -240,8 +246,7 @@ getProcStatField(enum Procstat_t type, char *out, size_t len)
 }
 
 // Returns the [stack] area by reading the proc maps
-static void
-getStackRegion(Area *stack) // OUT
+static void getStackRegion(Area *stack) // OUT
 {
   Area area;
   int mapsfd = open("/proc/self/maps", O_RDONLY);
@@ -256,26 +261,24 @@ getStackRegion(Area *stack) // OUT
 
 // Given a pointer to aux vector, parses the aux vector, and patches the
 // following three entries: AT_PHDR, AT_ENTRY, and AT_PHNUM
-static void
-patchAuxv(ElfW(auxv_t) *av, unsigned long phnum,
-          unsigned long phdr, unsigned long entry)
-{
+static void patchAuxv(ElfW(auxv_t) * av, unsigned long phnum,
+                      unsigned long phdr, unsigned long entry) {
   for (; av->a_type != AT_NULL; ++av) {
     switch (av->a_type) {
-      case AT_PHNUM:
-        av->a_un.a_val = phnum;
-        break;
-      case AT_PHDR:
-        av->a_un.a_val = phdr;
-        break;
-      case AT_ENTRY:
-        av->a_un.a_val = entry;
-        break;
-      case AT_RANDOM:
-        DLOG(NOISE, "AT_RANDOM value: 0%lx\n", av->a_un.a_val);
-        break;
-      default:
-        break;
+    case AT_PHNUM:
+      av->a_un.a_val = phnum;
+      break;
+    case AT_PHDR:
+      av->a_un.a_val = phdr;
+      break;
+    case AT_ENTRY:
+      av->a_un.a_val = entry;
+      break;
+    case AT_RANDOM:
+      DLOG(NOISE, "AT_RANDOM value: 0%lx\n", av->a_un.a_val);
+      break;
+    default:
+      break;
     }
   }
 }
@@ -283,19 +286,15 @@ patchAuxv(ElfW(auxv_t) *av, unsigned long phnum,
 // Creates a deep copy of the stack region pointed to be `origStack` at the
 // location pointed to be `newStack`. Returns the start-of-stack pointer
 // in the new stack region.
-static void*
-deepCopyStack(void *newStack, const void *origStack, size_t len,
-              const void *newStackEnd, const void *origStackEnd,
-              const DynObjInfo_t *info)
-{
+static void *deepCopyStack(void *newStack, const void *origStack, size_t len,
+                           const void *newStackEnd, const void *origStackEnd,
+                           const DynObjInfo_t *info) {
   // This function assumes that this env var is set.
   assert(getenv("TARGET_LD"));
   assert(getenv("UH_PRELOAD"));
 
   // Return early if any pointer is NULL
-  if (!newStack || !origStack ||
-      !newStackEnd || !origStackEnd ||
-      !info) {
+  if (!newStack || !origStack || !newStackEnd || !origStackEnd || !info) {
     return NULL;
   }
 
@@ -310,22 +309,22 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   // the argv and env are simply arrays of pointers. The pointers point to
   // strings in other locations in the stack.
 
-  void *origArgcAddr     = (void*)GET_ARGC_ADDR(origStackEnd);
-  int  origArgc          = *(int*)origArgcAddr;
-  char **origArgv        = (char**)GET_ARGV_ADDR(origStackEnd);
-  const char **origEnv   = (const char**)GET_ENV_ADDR(origArgv, origArgc);
+  void *origArgcAddr = (void *)GET_ARGC_ADDR(origStackEnd);
+  int origArgc = *(int *)origArgcAddr;
+  char **origArgv = (char **)GET_ARGV_ADDR(origStackEnd);
+  const char **origEnv = (const char **)GET_ENV_ADDR(origArgv, origArgc);
 
-  void *newArgcAddr     = (void*)GET_ARGC_ADDR(newStackEnd);
-  int  newArgc          = *(int*)newArgcAddr;
-  char **newArgv        = (char**)GET_ARGV_ADDR(newStackEnd);
-  const char **newEnv   = (const char**)GET_ENV_ADDR(newArgv, newArgc);
+  void *newArgcAddr = (void *)GET_ARGC_ADDR(newStackEnd);
+  int newArgc = *(int *)newArgcAddr;
+  char **newArgv = (char **)GET_ARGV_ADDR(newStackEnd);
+  const char **newEnv = (const char **)GET_ENV_ADDR(newArgv, newArgc);
   ElfW(auxv_t) *newAuxv = GET_AUXV_ADDR(newEnv);
 
   // Patch the argv vector in the new stack
   //   First, set up the argv vector based on the original stack
   for (int i = 0; origArgv[i] != NULL; i++) {
     off_t argvDelta = (uintptr_t)origArgv[i] - (uintptr_t)origArgv;
-    newArgv[i] = (char*)((uintptr_t)newArgv + (uintptr_t)argvDelta);
+    newArgv[i] = (char *)((uintptr_t)newArgv + (uintptr_t)argvDelta);
   }
 
   //   Next, we patch argv[0], the first argument, on the new stack
@@ -373,17 +372,17 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   //   new stack to point to "/path/to/ld.so", instead of
   //   "/path/to/kernel-loader".
   off_t argvDelta = (uintptr_t)getenv("TARGET_LD") - (uintptr_t)origArgv;
-  newArgv[0] = (char*)((uintptr_t)newArgv + (uintptr_t)argvDelta);
+  newArgv[0] = (char *)((uintptr_t)newArgv + (uintptr_t)argvDelta);
 
   // Patch the env vector in the new stack
   for (int i = 0; origEnv[i] != NULL; i++) {
     off_t envDelta = (uintptr_t)origEnv[i] - (uintptr_t)origEnv;
-    newEnv[i] = (char*)((uintptr_t)newEnv + (uintptr_t)envDelta);
+    newEnv[i] = (char *)((uintptr_t)newEnv + (uintptr_t)envDelta);
   }
 
   // Change "UH_PRELOAD" to "LD_PRELOAD". This way, upper half's ld.so
   // will preload the upper half wrapper library.
-  char **newEnvPtr = (char**)newEnv;
+  char **newEnvPtr = (char **)newEnv;
   for (; *newEnvPtr; newEnvPtr++) {
     if (strstr(*newEnvPtr, "UH_PRELOAD")) {
       (*newEnvPtr)[0] = 'L';
@@ -397,26 +396,23 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   // it has these entries AT_PHNUM, AT_PHDR, and AT_ENTRY that correspond
   // to kernel-loader. So, we atch the aux vector in the new stack to
   // correspond to the new binary: the freshly loaded ld.so.
-  patchAuxv(newAuxv, info->phnum,
-            (uintptr_t)info->phdr,
+  patchAuxv(newAuxv, info->phnum, (uintptr_t)info->phdr,
             (uintptr_t)info->entryPoint);
 
-printf("newArgv[-2]: %lu \n", (unsigned long)&newArgv[0]);
+  printf("newArgv[-2]: %lu \n", (unsigned long)&newArgv[0]);
 
   // We clear out the rest of the new stack region just in case ...
   memset(newStack, 0, (size_t)((uintptr_t)&newArgv[-2] - (uintptr_t)newStack));
 
   // Return the start of new stack.
-  return (void*)newArgcAddr;
+  return (void *)newArgcAddr;
 }
 
 // This function does three things:
 //  1. Creates a new stack region to be used for initialization of RTLD (ld.so)
 //  2. Deep copies the original stack (from the kernel) in the new stack region
 //  3. Returns a pointer to the beginning of stack in the new stack region
-static void*
-createNewStackForRtld(const DynObjInfo_t *info)
-{
+static void *createNewStackForRtld(const DynObjInfo_t *info) {
   Area stack;
   char stackEndStr[20] = {0};
   getStackRegion(&stack);
@@ -424,9 +420,9 @@ createNewStackForRtld(const DynObjInfo_t *info)
   // 1. Allocate new stack region
   // We go through the mmap wrapper function to ensure that this gets added
   // to the list of upper half regions to be checkpointed.
-  void *newStack = mmapWrapper(NULL, stack.size, PROT_READ | PROT_WRITE,
-                               MAP_GROWSDOWN | MAP_PRIVATE | MAP_ANONYMOUS,
-                               -1, 0);
+  void *newStack =
+      mmapWrapper(NULL, stack.size, PROT_READ | PROT_WRITE,
+                  MAP_GROWSDOWN | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (newStack == MAP_FAILED) {
     DLOG(ERROR, "Failed to mmap new stack region: %s\n", strerror(errno));
     return NULL;
@@ -438,6 +434,7 @@ createNewStackForRtld(const DynObjInfo_t *info)
   // stack region, and use that to index into the new memory region. The
   // same offsets are valid in both the stack regions.
   getProcStatField(STARTSTACK, stackEndStr, sizeof stackEndStr);
+  printf("stackEndStr=%s\n", stackEndStr);
 
   // NOTE: The kernel sets up the stack in the following format.
   //      -1(%rsp)                       Stack end for application
@@ -455,18 +452,21 @@ createNewStackForRtld(const DynObjInfo_t *info)
   // argv[0] is 1 LP_SIZE ahead of argc, i.e., startStack + sizeof(void*)
   // Stack End is 1 LP_SIZE behind argc, i.e., startStack - sizeof(void*)
   // sizeof(unsigned long) == sizeof(void*) == 8 on x86-64
-  unsigned long origStackEnd = atol(stackEndStr) - sizeof(unsigned long);
+  unsigned long origStackEnd = atoll(stackEndStr) - sizeof(unsigned long);
   unsigned long origStackOffset = origStackEnd - (unsigned long)stack.addr;
   unsigned long newStackOffset = origStackOffset;
-  void *newStackEnd = (void*)((unsigned long)newStack + newStackOffset);
+  void *newStackEnd = (void *)((unsigned long)newStack + newStackOffset);
 
-printf("origStack: %lu origStackOffset: %lu OrigStackEnd: %lu \n", (unsigned long)stack.addr, (unsigned long)origStackOffset, (unsigned long)origStackEnd);
-printf("newStack: %lu newStackOffset: %lu newStackEnd: %lu \n", (unsigned long)newStack, (unsigned long)newStackOffset, (unsigned long)newStackEnd);
+  printf("origStack: %lu origStackOffset: %lu OrigStackEnd: %lu \n",
+         (unsigned long)stack.addr, (unsigned long)origStackOffset,
+         (unsigned long)origStackEnd);
+  printf("newStack: %lu newStackOffset: %lu newStackEnd: %lu \n",
+         (unsigned long)newStack, (unsigned long)newStackOffset,
+         (unsigned long)newStackEnd);
 
   // 2. Deep copy stack
   newStackEnd = deepCopyStack(newStack, stack.addr, stack.size,
-                              (void*)newStackEnd, (void*)origStackEnd,
-                              info);
+                              (void *)newStackEnd, (void *)origStackEnd, info);
 
   return newStackEnd;
 }
@@ -476,9 +476,7 @@ printf("newStack: %lu newStackOffset: %lu newStackEnd: %lu \n", (unsigned long)n
 //
 // Returns the start address of the new heap on success, or NULL on
 // failure.
-static void*
-createNewHeapForRtld(const DynObjInfo_t *info)
-{
+static void *createNewHeapForRtld(const DynObjInfo_t *info) {
   const uint64_t heapSize = 100 * PAGE_SIZE;
 
   // We go through the mmap wrapper function to ensure that this gets added
@@ -486,31 +484,24 @@ createNewHeapForRtld(const DynObjInfo_t *info)
   void *addr = mmapWrapper(0, heapSize, PROT_READ | PROT_WRITE,
                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (addr == MAP_FAILED) {
-    DLOG(ERROR, "Failed to mmap region. Error: %s\n",
-         strerror(errno));
+    DLOG(ERROR, "Failed to mmap region. Error: %s\n", strerror(errno));
     return NULL;
   }
   // Add a guard page before the start of heap; this protects
   // the heap from getting merged with a "previous" region.
   mprotect(addr, PAGE_SIZE, PROT_NONE);
-  setUhBrk((void*)((VA)addr + PAGE_SIZE));
-  setEndOfHeap((void*)((VA)addr + heapSize));
+  setUhBrk((void *)((VA)addr + PAGE_SIZE));
+  setEndOfHeap((void *)((VA)addr + heapSize));
   return addr;
 }
 
 // This function returns the entry point of the ld.so executable given
 // the library handle
-static void*
-getEntryPoint(DynObjInfo_t info)
-{
-  return info.entryPoint;
-}
+static void *getEntryPoint(DynObjInfo_t info) { return info.entryPoint; }
 
 // Writes out the lhinfo global object to a file. Returns 0 on success,
 // -1 on failure.
-static int
-writeLhInfoToFile()
-{
+static int writeLhInfoToFile() {
   size_t rc = 0;
   char filename[100];
   snprintf(filename, 100, "./lhInfo_%d", getpid());
@@ -532,16 +523,14 @@ writeLhInfoToFile()
 
 // Sets up lower-half info struct for the upper half to read from. Returns 0
 // on success, -1 otherwise
-static int
-setupLowerHalfInfo()
-{
+static int setupLowerHalfInfo() {
   lhInfo.lhSbrk = (void *)&sbrkWrapper;
   lhInfo.lhMmap = (void *)&mmapWrapper;
   lhInfo.lhMunmap = (void *)&munmapWrapper;
   lhInfo.lhDlsym = (void *)&lhDlsym;
   lhInfo.lhMmapListFptr = (void *)&getMmappedList;
   lhInfo.uhEndofHeapFptr = (void *)&getEndOfHeap;
-  lhInfo.getFatCubinHandle=(void *)&fatHandle;
+  lhInfo.getFatCubinHandle = (void *)&fatHandle;
   // lhInfo.lhDeviceHeap = (void *)ROUND_DOWN(getDeviceHeapPtr());
   // lhInfo.lhGetDeviceHeapFptr = (void *)&getDeviceHeapPtr;
   // lhInfo.lhCopyToCudaPtrFptr = (void *)&copyToCudaPtr;
@@ -561,9 +550,7 @@ setupLowerHalfInfo()
   return 0;
 }
 
-static void
-readUhInfoAddr()
-{
+static void readUhInfoAddr() {
   char filename[100];
   // snprintf(filename, 100, "./uhInfo_%d", getpid());
   pid_t orig_pid = getUhPid();
@@ -578,8 +565,8 @@ readUhInfoAddr()
     perror("Read fewer bytes than expected from uhaddr.bin.");
     exit(-1);
   }
-//  unlink(UH_FILE_NAME);
-//  close(fd);
+  //  unlink(UH_FILE_NAME);
+  //  close(fd);
 }
 
 // enum for types
@@ -594,56 +581,54 @@ readUhInfoAddr()
 //   size_t mem_len;
 // }lhckpt_pages_t;
 
-void
-copy_lower_half_data() {
-  void * lhpages_addr = uhInfo.lhPagesRegion;
+void copy_lower_half_data() {
+  void *lhpages_addr = uhInfo.lhPagesRegion;
 
   // read total entries count
   int total_entries = 0;
   int count = 0;
-  memcpy(&total_entries, ((VA)lhpages_addr+count), sizeof (total_entries));
-  count += sizeof (total_entries);
+  memcpy(&total_entries, ((VA)lhpages_addr + count), sizeof(total_entries));
+  count += sizeof(total_entries);
   for (int i = 0; i < total_entries; i++) {
     // read metadata of one entry
     lhckpt_pages_t lhpage_info;
-    memcpy(&lhpage_info, ((VA)lhpages_addr+count), sizeof (lhpage_info));
+    memcpy(&lhpage_info, ((VA)lhpages_addr + count), sizeof(lhpage_info));
     count += sizeof(lhpage_info);
 
     void *dest_addr = lhpage_info.mem_addr;
     size_t size = lhpage_info.mem_len;
 
     switch (lhpage_info.mem_type) {
-      case (CUDA_UVM_PAGE):
-      case (CUDA_MALLOC_PAGE):
-      {
-        // copy back the actual data
-        cudaMemcpy(dest_addr, ((VA)lhpages_addr+count), size, cudaMemcpyHostToDevice);
-        count += size;
-        break;
-      }
-/*      case CUDA_HEAP_PAGE:
-      {
-        void *newDeviceHeapStart = (void *)ROUND_DOWN(getDeviceHeapPtr());
-        void *__cudaPtr = NULL;
-        void *oldDeviceHeapStart = dest_addr;
-        if (oldDeviceHeapStart != newDeviceHeapStart) {
-          DLOG(ERROR, "New Device heap = %p is not same as Old device heap =%p\n",
-          newDeviceHeapStart, oldDeviceHeapStart);
-        }
-        cudaMalloc(&__cudaPtr, size);
-        cudaMemcpy(__cudaPtr, ((VA)lhpages_addr+count), size, cudaMemcpyHostToDevice);
-        copyFromCudaPtr(__cudaPtr, newDeviceHeapStart, size);
-        char buf[8192];
-        copyToCudaPtr(__cudaPtr, newDeviceHeapStart, size);
-        cudaMemcpy(buf, __cudaPtr, size, cudaMemcpyDeviceToHost);
-        cudaFree(__cudaPtr);
-        cudaDeviceSynchronize();
-        count += size;
-        break;
-      } */
-      default:
-        printf("page type not implemented\n");
-        break;
+    case (CUDA_UVM_PAGE):
+    case (CUDA_MALLOC_PAGE): {
+      // copy back the actual data
+      cudaMemcpy(dest_addr, ((VA)lhpages_addr + count), size,
+                 cudaMemcpyHostToDevice);
+      count += size;
+      break;
+    }
+      /*      case CUDA_HEAP_PAGE:
+            {
+              void *newDeviceHeapStart = (void *)ROUND_DOWN(getDeviceHeapPtr());
+              void *__cudaPtr = NULL;
+              void *oldDeviceHeapStart = dest_addr;
+              if (oldDeviceHeapStart != newDeviceHeapStart) {
+                DLOG(ERROR, "New Device heap = %p is not same as Old device heap
+         =%p\n", newDeviceHeapStart, oldDeviceHeapStart);
+              }
+              cudaMalloc(&__cudaPtr, size);
+              cudaMemcpy(__cudaPtr, ((VA)lhpages_addr+count), size,
+         cudaMemcpyHostToDevice); copyFromCudaPtr(__cudaPtr, newDeviceHeapStart,
+         size); char buf[8192]; copyToCudaPtr(__cudaPtr, newDeviceHeapStart,
+         size); cudaMemcpy(buf, __cudaPtr, size, cudaMemcpyDeviceToHost);
+              cudaFree(__cudaPtr);
+              cudaDeviceSynchronize();
+              count += size;
+              break;
+            } */
+    default:
+      printf("page type not implemented\n");
+      break;
     }
   }
 }
